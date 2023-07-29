@@ -1,8 +1,10 @@
+import "./axios-bigint";
 import axios from "axios";
 import hmacSHA512 from "crypto-js/hmac-sha512";
 import { PrivateClient } from "./client";
 import { type } from "os";
 import { Symbol as Instrument } from "./symbols";
+import Decimal from "decimal.js";
 
 class ExchangeAPI {
   public listOrders() {}
@@ -39,10 +41,10 @@ class ContractClient {
 }
 
 type DCAOrderOptions = {
-  entryPriceStart: number;
-  entryPriceEnd: number;
-  risk: number;
-  stopLoss: number;
+  entryPriceStart: Decimal;
+  entryPriceEnd: Decimal;
+  risk: Decimal;
+  stopLoss: Decimal;
   dcaOrderCount: number;
   takeProfit?: number[];
 };
@@ -61,17 +63,23 @@ class LimitOrderManager {
 
     for (let i = 1; i < options.dcaOrderCount; i++) {
       limitPrices.push(
-        options.entryPriceStart +
-          ((options.entryPriceEnd - options.entryPriceStart) / (options.dcaOrderCount - 1)) * i
+        options.entryPriceStart.plus(
+          options.entryPriceEnd
+            .minus(options.entryPriceStart)
+            .div(options.dcaOrderCount - 1)
+            .mul(i)
+        )
       );
     }
 
-    const averagePrice = limitPrices.reduce((a, b) => a + b, 0) / limitPrices.length;
+    const averagePrice = limitPrices
+      .reduce((a, b) => a.plus(b), new Decimal(0))
+      .div(limitPrices.length);
 
     console.log("limitPrices:", limitPrices);
     console.log("averagePrice:", averagePrice);
 
-    const quantity = Math.abs(averagePrice - options.stopLoss) / options.risk;
+    const quantity = averagePrice.minus(options.stopLoss).abs().div(options.risk);
 
     const symbolDetails = await this.client.contractDetails(symbol);
 
@@ -79,10 +87,10 @@ class LimitOrderManager {
 
     console.log(
       "size:",
-      quantity / symbolDetails.data.contractSize,
+      quantity.div(symbolDetails.data.contractSize),
       "quantity:",
       quantity,
-      Math.abs(averagePrice - options.stopLoss)
+      averagePrice.minus(options.stopLoss)
     );
 
     console.log(await this.client.openOrders(symbol));
@@ -93,10 +101,10 @@ async function main() {
   // console.log(await client.openOrders("XLM_USDT"));
   // console.log(JSON.stringify((await client.allContractDetails()).data.map((x: any) => x.symbol)));
   new LimitOrderManager().placeDCALimitOrder("MKR_USDT", {
-    entryPriceStart: 100,
-    entryPriceEnd: 200,
-    risk: 1,
-    stopLoss: 150 - 10,
+    entryPriceStart: new Decimal(100),
+    entryPriceEnd: new Decimal(200),
+    risk: new Decimal(1),
+    stopLoss: new Decimal(150 - 10),
     dcaOrderCount: 5,
   });
   // new LimitOrderManager().placeDCALimitOrder("BTC_USDT", {
