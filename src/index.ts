@@ -66,26 +66,46 @@ class LimitOrderManager {
       );
     }
 
-    console.log(limitPrices);
+    const averagePrice = limitPrices.reduce((a, b) => a + b, 0) / limitPrices.length;
 
-    console.log(limitPrices.reduce((a, b) => a + b, 0) / limitPrices.length);
+    console.log("limitPrices:", limitPrices);
+    console.log("averagePrice:", averagePrice);
 
-    console.log();
+    const quantity = Math.abs(averagePrice - options.stopLoss) / options.risk;
+
+    const symbolDetails = await this.client.contractDetails(symbol);
+
+    console.log("symbolDetails:", symbolDetails);
+
+    console.log(
+      "size:",
+      quantity / symbolDetails.data.contractSize,
+      "quantity:",
+      quantity,
+      Math.abs(averagePrice - options.stopLoss)
+    );
+
+    console.log(await this.client.openOrders(symbol));
   }
 }
-
-const client = new ContractClient();
 
 async function main() {
   // console.log(await client.openOrders("XLM_USDT"));
   // console.log(JSON.stringify((await client.allContractDetails()).data.map((x: any) => x.symbol)));
-  new LimitOrderManager().placeDCALimitOrder("XLM_USDT", {
+  new LimitOrderManager().placeDCALimitOrder("MKR_USDT", {
     entryPriceStart: 100,
     entryPriceEnd: 200,
-    risk: 0.01,
-    stopLoss: 0.1,
-    dcaOrderCount: 100,
+    risk: 1,
+    stopLoss: 150 - 10,
+    dcaOrderCount: 5,
   });
+  // new LimitOrderManager().placeDCALimitOrder("BTC_USDT", {
+  //   entryPriceStart: 100,
+  //   entryPriceEnd: 200,
+  //   risk: 300,
+  //   stopLoss: 90,
+  //   dcaOrderCount: 5,
+  // });
 }
 
 main().catch(console.error);
