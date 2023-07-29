@@ -1,43 +1,14 @@
 import "./axios-bigint";
 import axios from "axios";
 import hmacSHA512 from "crypto-js/hmac-sha512";
-import { PrivateClient } from "./client";
 import { type } from "os";
-import { Symbol as Instrument } from "./symbols";
+import { Symbol as Instrument } from "./api/symbols.model";
 import Decimal from "decimal.js";
+import { ContractClient } from "./api/contract.client";
 
 class ExchangeAPI {
   public listOrders() {}
   public listPositions() {}
-}
-
-class ContractClient {
-  public static BASE_URL = "https://contract.mexc.com";
-  private client: PrivateClient = new PrivateClient(ContractClient.BASE_URL);
-
-  public async assets() {
-    return this.client.get("/api/v1/private/account/assets");
-  }
-
-  public async openPosition() {
-    return this.client.get("/api/v1/private/position/open_positions");
-  }
-
-  public async historicalOrders() {
-    return this.client.get("/api/v1/private/order/list/history_orders");
-  }
-
-  public async openOrders(symbol: Instrument) {
-    return this.client.get("/api/v1/private/order/list/open_orders/" + symbol);
-  }
-
-  public async contractDetails(symbol: Instrument) {
-    return this.client.get("/api/v1/contract/detail?symbol=" + symbol);
-  }
-
-  public async allContractDetails() {
-    return this.client.get("/api/v1/contract/detail");
-  }
 }
 
 type DCAOrderOptions = {
