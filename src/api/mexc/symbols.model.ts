@@ -1,4 +1,4 @@
-const symbols = [
+export const symbols = [
   "BTC_USDT",
   "ETH_USDT",
   "KNC_USDT",
@@ -302,4 +302,4 @@ const symbols = [
   "MONG_USDT",
   "AIDOGE_USDT",
 ] as const;
-export type Symbol = (typeof symbols)[number];
+export type Instrument = (typeof symbols)[number];

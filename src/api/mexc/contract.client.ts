@@ -1,5 +1,5 @@
 import { PrivateClient } from "./private.client";
-import { Symbol as Instrument } from "./symbols.model";
+import { Instrument as Instrument } from "./symbols.model";
 
 export class ContractClient {
   public static BASE_URL = "https://contract.mexc.com";

@@ -1,90 +1,175 @@
 import "./axios-bigint";
-import axios from "axios";
-import hmacSHA512 from "crypto-js/hmac-sha512";
-import { type } from "os";
-import { Symbol as Instrument } from "./api/symbols.model";
 import Decimal from "decimal.js";
-import { ContractClient } from "./api/contract.client";
+import { LimitOrderManager } from "./core/limit-order-manager";
+import os from "os";
+import path from "path";
+import { existsSync, mkdirSync, readFileSync, readSync, writeFileSync } from "fs";
+import axios from "axios";
+import { Message, Result, TelegramUpdateResponse } from "./api/telegram/update.model";
+import { symbols } from "./api/mexc/symbols.model";
+import {
+  Observable,
+  ObservableInput,
+  concatWith,
+  exhaustMap,
+  filter,
+  from,
+  ignoreElements,
+  interval,
+  map,
+  merge,
+  mergeMap,
+  of,
+  scan,
+  share,
+  tap,
+} from "rxjs";
+import { off } from "process";
 
-class ExchangeAPI {
-  public listOrders() {}
-  public listPositions() {}
-}
+const FORMAT = /.+ENTRY LIMIT.+Entry Zone:.+(TP\d: .+)+.*SL:.*/s;
 
-type DCAOrderOptions = {
-  entryPriceStart: Decimal;
-  entryPriceEnd: Decimal;
-  risk: Decimal;
-  stopLoss: Decimal;
-  dcaOrderCount: number;
-  takeProfit?: number[];
-};
-
-type Side = "BUY" | "SELL";
-
-class LimitOrderManager {
-  private client = new ContractClient();
-
-  public async placeLimitOrder(symbol: Instrument, options: DCAOrderOptions) {}
-
-  public async placeDCALimitOrder(symbol: Instrument, options: DCAOrderOptions) {
-    const limitPrices = [options.entryPriceStart];
-
-    const side: Side = options.entryPriceStart > options.entryPriceEnd ? "BUY" : "SELL";
-
-    for (let i = 1; i < options.dcaOrderCount; i++) {
-      limitPrices.push(
-        options.entryPriceStart.plus(
-          options.entryPriceEnd
-            .minus(options.entryPriceStart)
-            .div(options.dcaOrderCount - 1)
-            .mul(i)
-        )
-      );
+class MessageParser {
+  parse(message: string) {
+    if (!message.match(FORMAT)) {
+      return null;
     }
 
-    const averagePrice = limitPrices
-      .reduce((a, b) => a.plus(b), new Decimal(0))
-      .div(limitPrices.length);
+    const lines = message.split("\n");
 
-    console.log("limitPrices:", limitPrices);
-    console.log("averagePrice:", averagePrice);
+    const symbol = lines
+      .find((line) => line.includes(" / USDT"))!
+      .trim()
+      .split(" ")[0];
 
-    const quantity = averagePrice.minus(options.stopLoss).abs().div(options.risk);
+    const entryZone = lines
+      .find((line) => line.includes(" - "))!
+      .split(" - ")
+      .map((x) => x.replace(",", "").trim())
+      .map((x) => new Decimal(x));
 
-    const symbolDetails = await this.client.contractDetails(symbol);
+    const tp = lines
+      .filter((line) => line.match(/^TP\d: /))
+      .map((line) => line.trim().split(":")[1].trim())
+      .map((x) => new Decimal(x.replace(",", "")));
 
-    console.log("symbolDetails:", symbolDetails);
-
-    console.log(
-      "size:",
-      quantity.div(symbolDetails.data.contractSize),
-      "quantity:",
-      quantity,
-      averagePrice.minus(options.stopLoss)
+    const sl = new Decimal(
+      lines
+        .find((line) => line.startsWith("SL: "))!
+        .split(":")[1]
+        .trim()
+        .replace(",", "")
     );
 
-    console.log(await this.client.openOrders(symbol));
+    return {
+      symbol,
+      entryZone,
+      tp,
+      sl,
+    };
+  }
+}
+
+class TelegramBotApi {
+  public static cryptoChiefsPremiumGroupChatID = -1001520291354;
+  private offset: number;
+
+  private _messages$ = new Observable<Result>((subscriber) => {
+    interval(1000)
+      .pipe(
+        exhaustMap(async () => {
+          const updates = await this.getUpdates({ offset: this.offset + 1, timeout: 60 });
+          this.offset =
+            updates.result[updates.result.length - 1]?.update_id.toNumber() ?? this.offset;
+          return updates.result;
+        }),
+        tap((updates) => console.log(updates)),
+        mergeMap((m) => from(m)),
+        filter(
+          (m) => m.message.forward_from_chat?.id == TelegramBotApi.cryptoChiefsPremiumGroupChatID
+        ),
+        filter((m) => !!m.message.text.match(FORMAT))
+      )
+      .subscribe(subscriber);
+  }).pipe(share());
+
+  constructor() {
+    this.offset = this.getUpdateId() || 0;
+  }
+
+  private storeUpdateId(updateId: Decimal) {
+    if (!existsSync(path.join(os.homedir(), ".crypto-chiefs"))) {
+      mkdirSync(path.join(os.homedir(), ".crypto-chiefs"));
+    }
+
+    const db = path.join(os.homedir(), ".crypto-chiefs", ".telegram.json");
+    const data = existsSync(db) ? JSON.parse(readFileSync(db, "utf8")) : {};
+    data.updateId = updateId.toNumber();
+    writeFileSync(db, JSON.stringify(data, null, 2));
+  }
+
+  private getUpdateId(): number | undefined {
+    const db = path.join(os.homedir(), ".crypto-chiefs", ".telegram.json");
+    if (existsSync(db)) {
+      console.log("Reading file", db);
+      return JSON.parse(readFileSync(db, "utf8")).updateId;
+    }
+  }
+
+  private loadMessages() {}
+
+  /**
+   * @param handler After handler completes, the message will be ignored in future
+   * @returns
+   */
+  public messages$(handler: (message: Message) => ObservableInput<unknown>): Observable<never> {
+    return this._messages$.pipe(
+      mergeMap((m) => from(handler(m.message)).pipe(ignoreElements(), concatWith(of(m)))),
+      tap((m) => this.storeUpdateId(m.update_id)),
+      ignoreElements()
+    );
+  }
+
+  private async getUpdates(
+    options: {
+      offset?: number;
+      limit?: number;
+      timeout?: number;
+    } = {}
+  ): Promise<TelegramUpdateResponse> {
+    console.log("getUpdates", options);
+    return (
+      await axios.get(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/getUpdates`, {
+        params: options,
+      })
+    ).data as TelegramUpdateResponse;
   }
 }
 
 async function main() {
-  // console.log(await client.openOrders("XLM_USDT"));
-  // console.log(JSON.stringify((await client.allContractDetails()).data.map((x: any) => x.symbol)));
-  new LimitOrderManager().placeDCALimitOrder("MKR_USDT", {
-    entryPriceStart: new Decimal(100),
-    entryPriceEnd: new Decimal(200),
-    risk: new Decimal(1),
-    stopLoss: new Decimal(150 - 10),
-    dcaOrderCount: 5,
-  });
-  // new LimitOrderManager().placeDCALimitOrder("BTC_USDT", {
-  //   entryPriceStart: 100,
-  //   entryPriceEnd: 200,
-  //   risk: 300,
-  //   stopLoss: 90,
-  //   dcaOrderCount: 5,
-  // });
+  const bot = new TelegramBotApi();
+
+  bot
+    .messages$((m) => {
+      console.log(m.forward_from_message_id, new MessageParser().parse(m.text));
+      return of(null);
+    })
+
+    .subscribe();
+  // const trade = new MessageParser().parse(MSG);
+  // console.log(trade);
+  // console.log(
+  //   await new LimitOrderManager().placeDCALimitOrder("MKR_USDT", {
+  //     entryPriceStart: trade.entryZone[0],
+  //     entryPriceEnd: trade.entryZone[1],
+  //     risk: new Decimal(300),
+  //     stopLoss: trade.sl,
+  //     dcaOrderCount: 5,
+  //   })
+  // );
+  // console.log(
+  //   symbols.includes((trade.symbol + "_USDT") as any),
+  //   symbols.includes((trade.symbol + "_USD") as any)
+  // );
 }
 
 main().catch(console.error);
